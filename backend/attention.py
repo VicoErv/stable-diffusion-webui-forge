@@ -1,4 +1,5 @@
 import math
+import sys
 import torch
 import einops
 
@@ -17,6 +18,15 @@ if memory_management.xformers_enabled():
         BROKEN_XFORMERS = x_vers.startswith("0.0.2") and not x_vers.startswith("0.0.20")
     except:
         pass
+
+if memory_management.sage_attention_enabled():
+    try:
+        from sageattn3 import sageattn3_blackwell
+    except ModuleNotFoundError:
+        print(f"\n\nTo use `--use-sage-attention`/`--use-sage-attention3`, install SageAttention3 first.\n"
+              f"Reference:\n\thttps://github.com/thu-ml/SageAttention/tree/main/sageattention3_blackwell\n")
+        print(f"Python executable:\n\t{sys.executable}\n")
+        exit(-1)
 
 
 FORCE_UPCAST_ATTENTION_DTYPE = memory_management.force_upcast_attention_dtype()
@@ -339,6 +349,38 @@ def attention_pytorch(q, k, v, heads, mask=None, attn_precision=None, skip_resha
     return out
 
 
+def attention_sage3(q, k, v, heads, mask=None, attn_precision=None, skip_reshape=False):
+    if skip_reshape:
+        b, _, _, dim_head = q.shape
+    else:
+        b, _, dim_head = q.shape
+        dim_head //= heads
+
+    if mask is not None:
+        return attention_pytorch(q, k, v, heads, mask=mask, attn_precision=attn_precision, skip_reshape=skip_reshape)
+
+    if q.device.type != 'cuda':
+        return attention_pytorch(q, k, v, heads, mask=mask, attn_precision=attn_precision, skip_reshape=skip_reshape)
+
+    # SageAttention3 expects (batch, heads, seq_len, head_dim) in fp16/bf16.
+    if skip_reshape:
+        q_s, k_s, v_s = q, k, v
+    else:
+        q_s, k_s, v_s = map(
+            lambda t: t.view(b, -1, heads, dim_head).transpose(1, 2),
+            (q, k, v),
+        )
+
+    if q_s.dtype not in (torch.float16, torch.bfloat16):
+        q_s = q_s.to(torch.float16)
+        k_s = k_s.to(torch.float16)
+        v_s = v_s.to(torch.float16)
+
+    out = sageattn3_blackwell(q_s, k_s, v_s, is_causal=False)
+    out = out.transpose(1, 2).reshape(b, -1, heads * dim_head)
+    return out
+
+
 def slice_attention_single_head_spatial(q, k, v):
     r1 = torch.zeros_like(k, device=q.device)
     scale = (int(q.shape[-1]) ** (-0.5))
@@ -427,7 +469,10 @@ def pytorch_attention_single_head_spatial(q, k, v):
     return out
 
 
-if memory_management.xformers_enabled():
+if memory_management.sage_attention_enabled():
+    print("Using SageAttention3 cross attention")
+    attention_function = attention_sage3
+elif memory_management.xformers_enabled():
     print("Using xformers cross attention")
     attention_function = attention_xformers
 elif memory_management.pytorch_attention_enabled():

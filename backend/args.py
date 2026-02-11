@@ -31,6 +31,8 @@ attn_group = parser.add_mutually_exclusive_group()
 attn_group.add_argument("--attention-split", action="store_true")
 attn_group.add_argument("--attention-quad", action="store_true")
 attn_group.add_argument("--attention-pytorch", action="store_true")
+attn_group.add_argument("--use-sage-attention", action="store_true", help="Use SageAttention3 (sageattn3_blackwell) for cross attention.")
+attn_group.add_argument("--use-sage-attention3", action="store_true", help="Alias for --use-sage-attention.")
 
 upcast = parser.add_mutually_exclusive_group()
 upcast.add_argument("--force-upcast-attention", action="store_true")
